@@ -1,6 +1,7 @@
 #![allow(clippy::new_without_default)]
 
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
 use cost::{AdaptiveCostModel, RuntimeAdaptionStorage};
@@ -13,6 +14,7 @@ use rules::{
 
 pub use adaptive::PhysicalCollector;
 pub use optd_core::rel_node::Value;
+use crate::cost::{OptCostModel, RuntimeAdaptionStorageInner};
 
 mod adaptive;
 pub mod cost;
@@ -55,7 +57,7 @@ impl DatafusionOptimizer {
                 vec![Box::new(SchemaPropertyBuilder::new(catalog))],
                 OptimizerProperties {
                     partial_explore_iter: Some(1 << 20),
-                    partial_explore_space: Some(1 << 10),
+                    partial_explore_space: Some(1 << 20),
                 },
             ),
             enable_adaptive: true,
@@ -80,6 +82,25 @@ impl DatafusionOptimizer {
             runtime_statistics,
             optimizer,
             enable_adaptive: true,
+        }
+    }
+
+    pub fn new_non_adaptive_optimizer(catalog: Box<dyn Catalog>, table_stat: HashMap<String, usize>) -> Self {
+        let mut rules = PhysicalConversionRule::all_conversions();
+        rules.push(Arc::new(HashJoinRule::new()));
+        rules.insert(0, Arc::new(JoinCommuteRule::new()));
+        rules.insert(1, Arc::new(JoinAssocRule::new()));
+        rules.insert(2, Arc::new(ProjectionPullUpJoin::new()));
+        let cost_model = OptCostModel::new(table_stat.clone());
+        let optimizer = CascadesOptimizer::new(
+            rules,
+            Box::new(cost_model),
+            vec![Box::new(SchemaPropertyBuilder::new(catalog))],
+        );
+        Self {
+            runtime_statistics : Arc::new(Mutex::new(RuntimeAdaptionStorageInner::default())),
+            optimizer,
+            enable_adaptive: false,
         }
     }
 

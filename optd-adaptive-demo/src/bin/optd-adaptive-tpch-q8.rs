@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use datafusion::error::Result;
 use datafusion::execution::context::{SessionConfig, SessionState};
 use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
@@ -27,9 +28,17 @@ async fn main() -> Result<()> {
     let mut ctx = {
         let mut state =
             SessionState::new_with_config_rt(session_config.clone(), Arc::new(runtime_env));
-        let optimizer = DatafusionOptimizer::new_physical(Box::new(DatafusionCatalog::new(
-            state.catalog_list(),
-        )));
+        let optimizer = DatafusionOptimizer::new_non_adaptive_optimizer(Box::new(DatafusionCatalog::new(
+            state.catalog_list()
+        )), HashMap::from([(String::from("part"), 200_000),
+            (String::from("lineitem"), 6_000_000),
+            (String::from("supplier"), 10_000),
+            (String::from("customer"), 150_000),
+            (String::from("partsupp"), 800_000),
+            (String::from("nation"), 25),
+            (String::from("orders"), 1_500_000),
+            (String::from("region"), 5),
+        ]));
         state = state.with_query_planner(Arc::new(OptdQueryPlanner::new(optimizer)));
         SessionContext::new_with_state(state)
     };
@@ -60,43 +69,7 @@ async fn main() -> Result<()> {
         iter += 1;
         println!("--- ITERATION {} ---", iter);
         let sql = r#"
-select
-o_year,
-sum(case
-    when nation = 'IRAQ' then volume
-    else 0
-end) / sum(volume) as mkt_share
-from
-(
-    select
-        extract(year from o_orderdate) as o_year,
-        l_extendedprice * (1 - l_discount) as volume,
-        n2.n_name as nation
-    from
-        part,
-        supplier,
-        lineitem,
-        orders,
-        customer,
-        nation n1,
-        nation n2,
-        region
-    where
-        p_partkey = l_partkey
-        and s_suppkey = l_suppkey
-        and l_orderkey = o_orderkey
-        and o_custkey = c_custkey
-        and c_nationkey = n1.n_nationkey
-        and n1.n_regionkey = r_regionkey
-        and r_name = 'AMERICA'
-        and s_nationkey = n2.n_nationkey
-        and o_orderdate between date '1995-01-01' and date '1996-12-31'
-        and p_type = 'ECONOMY ANODIZED STEEL'
-) as all_nations
-group by
-o_year
-order by
-o_year;
+ SELECT s_suppkey FROM supplier, partsupp, nation WHERE s_suppkey = ps_suppkey and s_nationkey = n_nationkey;
         "#;
         let result = exec_from_commands_collect(&mut ctx, vec![format!("explain {}", sql)]).await?;
         println!(
